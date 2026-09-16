@@ -1,0 +1,236 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg-primary: #0A0C10;
+  --color-bg-secondary: #12151C;
+  --color-bg-card: #12151C;
+  --color-bg-card-hover: #1A1E29;
+  --color-border: #2A2E3B;
+  --color-border-hover: #E3A857;
+  --color-accent: #E3A857;
+  --color-accent-hover: #4FD8C4;
+  --color-accent-dim: #C9524B;
+  --color-text-primary: #EDE9E1;
+  --color-text-secondary: #8B949E;
+  --color-text-muted: #6E7681;
+  --color-success: #4FD8C4;
+  --color-warning: #E3A857;
+  --color-error: #C9524B;
+  
+  --font-family-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-family-serif: 'Newsreader', Georgia, serif;
+  --font-family-mono: 'JetBrains Mono', monospace;
+  
+  --z-index-base: 0;
+  --z-index-cards: 10;
+  --z-index-sticky-nav: 100;
+  --z-index-floating: 500;
+  --z-index-modal: 1000;
+  --z-index-toast: 1100;
+}
+
+/*
+ * ALL custom CSS is inside @layer base so that Tailwind utility classes
+ * (which live in @layer utilities) always win in the CSS cascade.
+ *
+ * Previously, these rules were OUTSIDE any @layer, which made them
+ * higher priority than all Tailwind utilities — the root cause of
+ * padding/margin/gap not working anywhere in the app.
+ */
+@layer base {
+  html {
+    font-family: var(--font-family-sans);
+    background-color: var(--color-bg-primary);
+    color: var(--color-text-primary);
+    scroll-behavior: smooth;
+  }
+
+  body { min-height: 100vh; overflow-x: hidden; }
+
+  /* Scrollbar styling */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border) var(--color-bg-secondary);
+  }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--color-bg-secondary); }
+  ::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--color-accent-dim); }
+
+  /* Focus ring */
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  /* Selection */
+  ::selection {
+    background: var(--color-accent);
+    color: white;
+  }
+
+  /* Smooth link transitions */
+  a { transition: color 0.2s ease; }
+}
+
+/* Component-level styles in @layer components */
+@layer components {
+  .glass {
+    background: rgba(18,21,28,0.7);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--color-border);
+  }
+
+  .card-glow { position: relative; overflow: hidden; }
+  .card-glow::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    background: radial-gradient(600px circle at var(--mouse-x,50%) var(--mouse-y,50%), rgba(227,168,87,0.08), transparent 40%);
+    pointer-events: none;
+    z-index: 1;
+  }
+  .card-glow:hover::before { opacity: 1; }
+
+  .tilt-card { perspective: 800px; }
+  .tilt-card-inner { transition: transform 0.15s ease-out; transform-style: preserve-3d; }
+
+  .gradient-text { color: var(--color-accent); }
+
+  .btn-primary {
+    background: var(--color-accent);
+    color: var(--color-bg-primary);
+    padding: 0.75rem 2rem;
+    border-radius: 4px;
+    font-weight: 600;
+    font-family: var(--font-family-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border: none;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+  }
+  .btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(227,168,87,0.3);
+    background: var(--color-accent-hover);
+  }
+  .btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+  }
+
+  /* Signal Line Motif */
+  .signal-line { position: relative; }
+  .signal-line::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 2px; height: 100%;
+    background: var(--color-accent);
+  }
+  .signal-line-top::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 2px;
+    background: var(--color-accent);
+  }
+
+  .skeleton {
+    background: linear-gradient(90deg, var(--color-bg-card) 25%, var(--color-bg-card-hover) 50%, var(--color-bg-card) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+  }
+
+  /* Accessible skip link */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+  }
+
+  /* Chat markdown content — replaces missing @tailwindcss/typography prose classes */
+  .chat-markdown p {
+    margin-bottom: 0.5rem;
+  }
+  .chat-markdown p:last-child {
+    margin-bottom: 0;
+  }
+  .chat-markdown ul,
+  .chat-markdown ol {
+    margin-left: 1.25rem;
+    margin-bottom: 0.5rem;
+  }
+  .chat-markdown li {
+    margin-bottom: 0.25rem;
+  }
+  .chat-markdown code {
+    background: rgba(255,255,255,0.08);
+    padding: 0.15rem 0.35rem;
+    border-radius: 3px;
+    font-size: 0.85em;
+    font-family: var(--font-family-mono);
+  }
+  .chat-markdown pre {
+    background: rgba(0,0,0,0.3);
+    padding: 0.75rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin-bottom: 0.5rem;
+  }
+  .chat-markdown pre code {
+    background: none;
+    padding: 0;
+  }
+  .chat-markdown h1, .chat-markdown h2, .chat-markdown h3,
+  .chat-markdown h4, .chat-markdown h5, .chat-markdown h6 {
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+  }
+  .chat-markdown blockquote {
+    border-left: 3px solid var(--color-accent);
+    padding-left: 0.75rem;
+    margin-bottom: 0.5rem;
+    opacity: 0.85;
+  }
+  .chat-markdown a {
+    color: var(--color-accent);
+    text-decoration: underline;
+  }
+}
+
+@keyframes slideInRight { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+@keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+
+@utility animate-fade-up {
+  animation: fadeUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  opacity: 0;
+}
+
+/* Respect reduced-motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .tilt-card-inner { transition: none !important; }
+  .skeleton { animation: none !important; }
+}
