@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useNews } from '../hooks/useNews';
 import { extractTrendingKeywords } from '../services/newsService';
@@ -11,7 +11,9 @@ import {
   RefreshCcw, 
   Search, 
   X, 
-  Sparkles
+  Sparkles,
+  Globe,
+  MapPin
 } from 'lucide-react';
 
 export default function HomePage() {
@@ -23,12 +25,22 @@ export default function HomePage() {
 
   const [activePerspective, setActivePerspective] = useState(perspectiveParam);
   const [selectedState, setSelectedState] = useState('');
-  const [selectedCountries, setSelectedCountries] = useState(['us', 'gb']);
+  const [selectedCountry, setSelectedCountry] = useState('us');
   const [articleLimit, setArticleLimit] = useState(12);
 
-  // Determine effective query and country based on perspective and state
-  const countryCode = activePerspective === 'india' ? 'in' : (selectedCountries[0] || 'us');
-  const effectiveQuery = queryParam || (selectedState ? selectedState : '');
+  // Sync state with URL parameter if updated externally
+  useEffect(() => {
+    if (perspectiveParam && perspectiveParam !== activePerspective) {
+      setActivePerspective(perspectiveParam);
+      if (perspectiveParam === 'world') {
+        setSelectedState('');
+      }
+    }
+  }, [perspectiveParam, activePerspective]);
+
+  // Determine effective country code and search query
+  const countryCode = activePerspective === 'india' ? 'in' : (selectedCountry || 'us');
+  const effectiveQuery = queryParam || (activePerspective === 'india' && selectedState ? selectedState : '');
 
   const {
     articles,
@@ -77,9 +89,12 @@ export default function HomePage() {
     setSearchParams(nextParams);
   };
 
-  // Change perspective (India vs World)
+  // Change perspective (India vs World) with state cleanup
   const handlePerspectiveChange = (mode) => {
     setActivePerspective(mode);
+    if (mode === 'world') {
+      setSelectedState('');
+    }
     const nextParams = new URLSearchParams(searchParams);
     nextParams.set('perspective', mode);
     setSearchParams(nextParams);
@@ -106,6 +121,7 @@ export default function HomePage() {
                   Search: "{queryParam}"
                 </h1>
                 <button
+                  type="button"
                   onClick={handleClearSearch}
                   className="px-2.5 py-1 rounded-lg text-xs font-mono bg-[var(--color-bg-secondary)] border border-[var(--color-border)] hover:border-[var(--color-accent)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-all flex items-center gap-1 cursor-pointer"
                 >
@@ -114,11 +130,21 @@ export default function HomePage() {
               </div>
             ) : (
               <div className="flex items-center gap-3">
-                <h1 className="font-serif font-black text-2xl sm:text-3xl tracking-tight text-[var(--color-text-primary)]">
-                  {activePerspective === 'india' ? '🇮🇳 India Intelligence' : '🌐 World Perspective'}
+                <h1 className="font-serif font-black text-2xl sm:text-3xl tracking-tight text-[var(--color-text-primary)] flex items-center gap-2">
+                  {activePerspective === 'india' ? (
+                    <>
+                      <MapPin className="w-6 h-6 text-[var(--color-accent)] shrink-0" />
+                      <span>{selectedState ? `${selectedState} Intelligence` : 'India Intelligence'}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Globe className="w-6 h-6 text-[var(--color-accent)] shrink-0" />
+                      <span>Global Intelligence</span>
+                    </>
+                  )}
                 </h1>
                 <span className="hidden sm:inline-block text-xs font-mono text-[var(--color-text-muted)] uppercase tracking-wider px-2 py-0.5 rounded-full bg-[var(--color-bg-secondary)] border border-[var(--color-border)]">
-                  {totalResults > 0 ? `${totalResults} stories` : 'Live Dispatch'}
+                  {loading ? 'Refreshing...' : (totalResults > 0 ? `${totalResults} stories` : 'Live Dispatch')}
                 </span>
               </div>
             )}
@@ -156,11 +182,12 @@ export default function HomePage() {
             {activePerspective === 'india' ? (
               <StateSelector value={selectedState} onChange={setSelectedState} />
             ) : (
-              <CountrySelector selected={selectedCountries} onChange={setSelectedCountries} />
+              <CountrySelector selectedCountry={selectedCountry} onChange={setSelectedCountry} />
             )}
 
             {/* Manual Refresh Button */}
             <button
+              type="button"
               onClick={refresh}
               disabled={loading}
               title="Refresh feed"

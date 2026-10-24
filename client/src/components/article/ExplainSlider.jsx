@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { getExplanation } from '../../services/api';
 import { EXPLAIN_LEVELS } from '../../utils/constants';
 import { Radio, RefreshCw, Sparkles } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 import { motion } from 'framer-motion';
 
 export default function ExplainSlider({ articleText }) {
@@ -155,10 +156,8 @@ export default function ExplainSlider({ articleText }) {
 
           {/* Success: Display Result */}
           {displaySummary && !loading && !error && (
-            <div className="prose prose-invert max-w-none text-[var(--color-text-primary)] leading-relaxed animate-in fade-in text-sm font-sans">
-              {displaySummary.split('\n').map((para, i) => (
-                para ? <p key={i} className="mb-2 last:mb-0 text-[var(--color-text-primary)]">{para}</p> : <br key={i} />
-              ))}
+            <div className="prose prose-invert max-w-none text-[var(--color-text-primary)] leading-relaxed animate-in fade-in text-sm font-sans space-y-2">
+              <ReactMarkdown>{displaySummary}</ReactMarkdown>
             </div>
           )}
         </div>

@@ -37,6 +37,15 @@ router.get('/usage', async (req, res) => {
     if (global.FIREBASE_FIRESTORE_ENABLED === false) {
       return res.json({
         status: 'ok',
+        newsApi: {
+          calls: 0,
+          limit: parseInt(process.env.NEWS_API_DAILY_LIMIT, 10) || 90,
+        },
+        groq: {
+          tokensUsed: 0,
+          callCount: 0,
+          limit: parseInt(process.env.GROQ_TOKEN_DAILY_LIMIT, 10) || 100000,
+        },
         usage: days.map((day) => ({
           date: day,
           newsApiCalls: 0,
@@ -67,8 +76,19 @@ router.get('/usage', async (req, res) => {
       });
     }
 
+    const todayData = usageData[0] || { newsApiCalls: 0, groqTokensUsed: 0, groqCallCount: 0 };
+
     return res.json({
       status: 'ok',
+      newsApi: {
+        calls: todayData.newsApiCalls || 0,
+        limit: parseInt(process.env.NEWS_API_DAILY_LIMIT, 10) || 90,
+      },
+      groq: {
+        tokensUsed: todayData.groqTokensUsed || 0,
+        callCount: todayData.groqCallCount || 0,
+        limit: parseInt(process.env.GROQ_TOKEN_DAILY_LIMIT, 10) || 100000,
+      },
       usage: usageData,
       limits: {
         newsApiDaily: parseInt(process.env.NEWS_API_DAILY_LIMIT, 10) || 90,

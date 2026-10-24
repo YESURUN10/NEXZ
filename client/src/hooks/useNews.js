@@ -18,24 +18,36 @@ export function useNews({
   const [totalResults, setTotalResults] = useState(0);
 
   const isMountedRef = useRef(true);
-  const inFlightRef = useRef(false);
+  const requestIdRef = useRef(0);
+  const abortControllerRef = useRef(null);
 
   useEffect(() => {
     isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
     };
   }, []);
 
   const fetchBatch = useCallback(
     async ({ targetPage = 1, append = false, forceRefresh = false } = {}) => {
-      if (inFlightRef.current) return;
-      inFlightRef.current = true;
+      // Abort prior in-flight request if starting a fresh batch
+      if (!append && abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
+      const currentReqId = ++requestIdRef.current;
 
       if (append) {
         setLoadingMore(true);
       } else {
         setLoading(true);
+        // Clear stale articles on fresh mode/category/country switch
+        setArticles([]);
       }
       setError(null);
 
@@ -43,7 +55,7 @@ export function useNews({
         let result;
         if (query && query.trim()) {
           result = await searchArticles({
-            query,
+            query: query.trim(),
             category,
             page: targetPage,
             limit,
@@ -51,7 +63,7 @@ export function useNews({
           });
         } else {
           result = await getTopHeadlines({
-            country,
+            country: country || 'in',
             category,
             page: targetPage,
             limit,
@@ -59,7 +71,10 @@ export function useNews({
           });
         }
 
-        if (!isMountedRef.current) return;
+        // Drop if component unmounted or superseded by a newer request
+        if (!isMountedRef.current || currentReqId !== requestIdRef.current) {
+          return;
+        }
 
         const newArticles = result.articles || [];
         setTotalResults(result.totalResults || 0);
@@ -73,21 +88,25 @@ export function useNews({
           return deduplicateArticles(newArticles);
         });
       } catch (err) {
-        if (!isMountedRef.current) return;
+        if (!isMountedRef.current || currentReqId !== requestIdRef.current) {
+          return;
+        }
+        if (err.name === 'CanceledError' || err.name === 'AbortError') {
+          return;
+        }
         const msg = err.response?.data?.message || err.message || 'Failed to load news';
         setError(msg);
       } finally {
-        if (isMountedRef.current) {
+        if (isMountedRef.current && currentReqId === requestIdRef.current) {
           setLoading(false);
           setLoadingMore(false);
         }
-        inFlightRef.current = false;
       }
     },
     [query, category, country, limit]
   );
 
-  // Fetch when query, category, country, or limit changes
+  // Trigger when query, category, country, or limit changes
   useEffect(() => {
     if (autoFetch) {
       setPage(1);

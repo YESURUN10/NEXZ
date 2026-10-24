@@ -4,34 +4,103 @@ import Groq from 'groq-sdk';
 let geminiClient = null;
 let groqClient = null;
 
+function isValidKey(key) {
+  if (!key || typeof key !== 'string') return false;
+  const trimmed = key.trim();
+  if (trimmed.length < 10) return false;
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith('your_') || lower.includes('placeholder') || lower.startsWith('mock_')) {
+    return false;
+  }
+  return true;
+}
+
 function getGemini() {
   const key = process.env.GEMINI_API_KEY;
-  if (!key || key.startsWith('your_') || key.length < 10) {
-    return null;
-  }
+  if (!isValidKey(key)) return null;
   if (!geminiClient) {
-    geminiClient = new GoogleGenAI({ apiKey: key });
+    geminiClient = new GoogleGenAI({
+      apiKey: key.trim(),
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
   }
   return geminiClient;
 }
 
 function getGroq() {
   const key = process.env.GROQ_API_KEY;
-  if (!key || key.startsWith('your_') || key.length < 10) {
-    return null;
-  }
+  if (!isValidKey(key)) return null;
   if (!groqClient) {
-    groqClient = new Groq({ apiKey: key });
+    groqClient = new Groq({ apiKey: key.trim() });
   }
   return groqClient;
 }
 
-const GEMINI_MODELS = ['gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-3.8-flash'];
+const GEMINI_MODELS = ['gemini-3.1-flash-lite', 'gemini-flash-latest'];
+const GROQ_MODELS = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'];
+
+/**
+ * Resolves the active AI provider strategy based on AI_PROVIDER environment variable
+ * and available credentials.
+ */
+export function getAIProviderStrategy() {
+  const requested = (process.env.AI_PROVIDER || 'auto').trim().toLowerCase();
+  const hasGemini = isValidKey(process.env.GEMINI_API_KEY);
+  const hasGroq = isValidKey(process.env.GROQ_API_KEY);
+
+  if (requested === 'gemini') {
+    if (!hasGemini) {
+      const err = new Error('Gemini API key is required when AI_PROVIDER is set to "gemini". Please set GEMINI_API_KEY in your server environment variables.');
+      err.aiError = {
+        status: 401,
+        code: 'invalid_api_key',
+        category: 'Authentication Error',
+        message: err.message,
+      };
+      throw err;
+    }
+    return { primary: 'gemini', fallback: null };
+  }
+
+  if (requested === 'groq') {
+    if (!hasGroq) {
+      const err = new Error('Groq API key is required when AI_PROVIDER is set to "groq". Please set GROQ_API_KEY in your server environment variables.');
+      err.aiError = {
+        status: 401,
+        code: 'invalid_api_key',
+        category: 'Authentication Error',
+        message: err.message,
+      };
+      throw err;
+    }
+    return { primary: 'groq', fallback: null };
+  }
+
+  // Auto mode
+  if (hasGemini) {
+    return { primary: 'gemini', fallback: hasGroq ? 'groq' : null };
+  }
+  if (hasGroq) {
+    return { primary: 'groq', fallback: null };
+  }
+
+  const err = new Error('No AI provider API key found on the server. Please configure GEMINI_API_KEY (recommended) or GROQ_API_KEY in your server environment variables.');
+  err.aiError = {
+    status: 401,
+    code: 'invalid_api_key',
+    category: 'Authentication Error',
+    message: err.message,
+  };
+  throw err;
+}
 
 /**
  * Categorizes an AI provider error into standard HTTP status, machine code, and user-friendly category.
- * @param {Error|any} err
- * @returns {{status: number, code: string, category: string, message: string}}
+ * Sanitizes messages to prevent leaking credential fragments.
  */
 export function categorizeAIError(err) {
   const msg = (err?.message || '').toLowerCase();
@@ -82,127 +151,147 @@ export function categorizeAIError(err) {
     status: 500,
     code: 'ai_error',
     category: 'Server Error',
-    message: err?.message || 'The AI service encountered an internal error.',
+    message: err?.message ? err.message.slice(0, 200) : 'The AI service encountered an internal error.',
   };
 }
 
 /**
- * Standard chat / text completion with Gemini as primary and Groq as alternative.
- * @param {Array<{role: string, content: string}>} messages
- * @param {object} options
- * @returns {Promise<{content: string, usage: {total_tokens: number}, provider: string}>}
+ * Executes a completion with Gemini.
  */
-export async function chatCompletion(messages, options = {}) {
+async function callGeminiChat(messages, options = {}) {
   const gemini = getGemini();
-  const groq = getGroq();
+  if (!gemini) throw new Error('Gemini client unavailable');
 
-  // Try Gemini first across resilient model candidates
-  if (gemini) {
-    const systemInstruction = messages.find((m) => m.role === 'system')?.content;
-    const conversation = messages
-      .filter((m) => m.role !== 'system')
-      .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
-      .join('\n\n');
+  const systemInstruction = messages.find((m) => m.role === 'system')?.content;
+  const conversation = messages
+    .filter((m) => m.role !== 'system')
+    .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+    .join('\n\n');
 
-    const prompt = conversation || messages.map((m) => m.content).join('\n\n');
+  const prompt = conversation || messages.map((m) => m.content).join('\n\n');
 
-    let lastError = null;
-    for (const model of GEMINI_MODELS) {
-      const modelStartTime = Date.now();
-      console.log(`[AI Engine] Provider request sent: provider=gemini | model=${model} | prompt_length=${prompt.length} chars`);
-      try {
-        const response = await gemini.models.generateContent({
-          model,
-          contents: prompt,
-          config: {
-            systemInstruction: systemInstruction || undefined,
-            temperature: options.temperature ?? 0.7,
-            maxOutputTokens: options.max_tokens ?? 1024,
-          },
-        });
-
-        const elapsed = Date.now() - modelStartTime;
-        const text = response.text || '';
-        const tokenUsage = Math.ceil((prompt.length + text.length) / 4);
-        console.log(`[AI Engine] Provider response received: provider=gemini | model=${model} | status=200 | elapsed=${elapsed}ms | tokens=${tokenUsage}`);
-
-        return {
-          content: text,
-          usage: {
-            total_tokens: tokenUsage,
-          },
-          provider: `gemini (${model})`,
-        };
-      } catch (err) {
-        const elapsed = Date.now() - modelStartTime;
-        const cat = categorizeAIError(err);
-        console.warn(`[AI Engine] Model ${model} failed: status=${cat.status} | category=${cat.category} | elapsed=${elapsed}ms: ${err.message?.slice(0, 150)}`);
-        lastError = err;
-      }
-    }
-
-    if (!groq) {
-      const finalCat = categorizeAIError(lastError);
-      const customErr = new Error(finalCat.message);
-      customErr.aiError = finalCat;
-      throw customErr;
-    }
-  }
-
-  // Fallback to Groq if configured
-  if (groq) {
-    const groqStartTime = Date.now();
-    console.log(`[AI Engine] Provider request sent: provider=groq | model=llama-3.3-70b-versatile`);
+  let lastErr = null;
+  for (const model of GEMINI_MODELS) {
+    const startTime = Date.now();
     try {
-      const response = await groq.chat.completions.create({
-        model: 'llama-3.3-70b-versatile',
-        messages,
-        temperature: options.temperature ?? 0.7,
-        max_tokens: options.max_tokens ?? 1024,
+      const response = await gemini.models.generateContent({
+        model,
+        contents: prompt,
+        config: {
+          systemInstruction: systemInstruction || undefined,
+          temperature: options.temperature ?? 0.7,
+          maxOutputTokens: options.max_tokens ?? 1500,
+        },
       });
-      const choice = response.choices[0];
-      const elapsed = Date.now() - groqStartTime;
-      console.log(`[AI Engine] Provider response received: provider=groq | status=200 | elapsed=${elapsed}ms | tokens=${response.usage?.total_tokens ?? 0}`);
+
+      const elapsed = Date.now() - startTime;
+      const text = response.text || '';
+      const tokens = Math.ceil((prompt.length + text.length) / 4);
+      console.log(`[AI Engine] Gemini success: model=${model} | elapsed=${elapsed}ms | tokens=${tokens}`);
 
       return {
-        content: choice.message.content,
-        usage: {
-          total_tokens: response.usage?.total_tokens ?? 0,
-        },
-        provider: 'groq',
+        content: text,
+        usage: { total_tokens: tokens },
+        provider: `gemini (${model})`,
       };
     } catch (err) {
-      const elapsed = Date.now() - groqStartTime;
-      const cat = categorizeAIError(err);
-      console.error(`[AI Engine] Groq fallback failed: status=${cat.status} | category=${cat.category} | elapsed=${elapsed}ms: ${err.message?.slice(0, 150)}`);
-      const customErr = new Error(cat.message);
-      customErr.aiError = cat;
-      throw customErr;
+      console.warn(`[AI Engine] Gemini model ${model} failed: ${err.message?.slice(0, 120)}`);
+      lastErr = err;
     }
   }
 
-  const noKeyCat = {
-    status: 401,
-    code: 'invalid_api_key',
-    category: 'Authentication Error',
-    message: 'No valid AI provider API key found (GEMINI_API_KEY is required).',
-  };
-  const noKeyErr = new Error(noKeyCat.message);
-  noKeyErr.aiError = noKeyCat;
-  throw noKeyErr;
+  throw lastErr;
 }
 
 /**
- * JSON-mode structured completion.
- * @param {Array<{role: string, content: string}>} messages
- * @param {object} options
- * @returns {Promise<{data: any, usage: {total_tokens: number}, provider: string}>}
+ * Executes a completion with Groq.
+ */
+async function callGroqChat(messages, options = {}) {
+  const groq = getGroq();
+  if (!groq) throw new Error('Groq client unavailable');
+
+  let lastErr = null;
+  for (const model of GROQ_MODELS) {
+    const startTime = Date.now();
+    try {
+      const response = await groq.chat.completions.create({
+        model,
+        messages,
+        temperature: options.temperature ?? 0.7,
+        max_tokens: options.max_tokens ?? 1500,
+      });
+
+      const choice = response.choices?.[0];
+      const elapsed = Date.now() - startTime;
+      const tokens = response.usage?.total_tokens ?? 0;
+      console.log(`[AI Engine] Groq success: model=${model} | elapsed=${elapsed}ms | tokens=${tokens}`);
+
+      return {
+        content: choice?.message?.content || '',
+        usage: { total_tokens: tokens },
+        provider: `groq (${model})`,
+      };
+    } catch (err) {
+      console.warn(`[AI Engine] Groq model ${model} failed: ${err.message?.slice(0, 120)}`);
+      lastErr = err;
+    }
+  }
+
+  throw lastErr;
+}
+
+/**
+ * Standard chat / text completion honoring the configured provider strategy.
+ */
+export async function chatCompletion(messages, options = {}) {
+  const strategy = getAIProviderStrategy();
+
+  if (strategy.primary === 'gemini') {
+    try {
+      return await callGeminiChat(messages, options);
+    } catch (err) {
+      if (strategy.fallback === 'groq') {
+        console.warn('[AI Engine] Primary Gemini failed, attempting Groq fallback...');
+        try {
+          return await callGroqChat(messages, options);
+        } catch (groqErr) {
+          const cat = categorizeAIError(groqErr);
+          const error = new Error(cat.message);
+          error.aiError = cat;
+          throw error;
+        }
+      }
+      const cat = categorizeAIError(err);
+      const error = new Error(cat.message);
+      error.aiError = cat;
+      throw error;
+    }
+  }
+
+  if (strategy.primary === 'groq') {
+    try {
+      return await callGroqChat(messages, options);
+    } catch (err) {
+      const cat = categorizeAIError(err);
+      const error = new Error(cat.message);
+      error.aiError = cat;
+      throw error;
+    }
+  }
+
+  throw new Error('Unknown AI strategy');
+}
+
+/**
+ * JSON-mode structured completion with schema parsing and error resilience.
  */
 export async function jsonCompletion(messages, options = {}) {
-  const gemini = getGemini();
-  const groq = getGroq();
+  const strategy = getAIProviderStrategy();
 
-  if (gemini) {
+  const tryGeminiJson = async () => {
+    const gemini = getGemini();
+    if (!gemini) throw new Error('Gemini client unavailable');
+
     const systemInstruction = messages.find((m) => m.role === 'system')?.content;
     const conversation = messages
       .filter((m) => m.role !== 'system')
@@ -211,22 +300,19 @@ export async function jsonCompletion(messages, options = {}) {
 
     const prompt = `${conversation}\n\nPlease output strict JSON without Markdown fences.`;
 
-    let lastError = null;
+    let lastErr = null;
     for (const model of GEMINI_MODELS) {
-      const modelStartTime = Date.now();
-      console.log(`[AI Engine JSON] Provider request sent: provider=gemini | model=${model} | prompt_length=${prompt.length} chars`);
       try {
         const response = await gemini.models.generateContent({
           model,
           contents: prompt,
           config: {
             systemInstruction: systemInstruction || undefined,
-            temperature: options.temperature ?? 0.3,
+            temperature: options.temperature ?? 0.2,
             responseMimeType: 'application/json',
           },
         });
 
-        const elapsed = Date.now() - modelStartTime;
         const text = (response.text || '{}').trim();
         let parsed;
         try {
@@ -236,69 +322,77 @@ export async function jsonCompletion(messages, options = {}) {
           parsed = JSON.parse(cleaned);
         }
 
-        const tokenUsage = Math.ceil((prompt.length + text.length) / 4);
-        console.log(`[AI Engine JSON] Provider response received: provider=gemini | model=${model} | status=200 | elapsed=${elapsed}ms | tokens=${tokenUsage}`);
-
+        const tokens = Math.ceil((prompt.length + text.length) / 4);
         return {
           data: parsed,
-          usage: {
-            total_tokens: tokenUsage,
-          },
+          usage: { total_tokens: tokens },
           provider: `gemini (${model})`,
         };
       } catch (err) {
-        const elapsed = Date.now() - modelStartTime;
-        const cat = categorizeAIError(err);
-        console.warn(`[AI Engine JSON] Model ${model} failed: status=${cat.status} | category=${cat.category} | elapsed=${elapsed}ms: ${err.message?.slice(0, 150)}`);
-        lastError = err;
+        lastErr = err;
       }
     }
-
-    if (!groq) {
-      const finalCat = categorizeAIError(lastError);
-      const customErr = new Error(finalCat.message);
-      customErr.aiError = finalCat;
-      throw customErr;
-    }
-  }
-
-  if (groq) {
-    const groqStartTime = Date.now();
-    console.log(`[AI Engine JSON] Provider request sent: provider=groq | model=llama-3.3-70b-versatile`);
-    try {
-      const response = await groq.chat.completions.create({
-        model: 'llama-3.3-70b-versatile',
-        messages,
-        temperature: options.temperature ?? 0.3,
-        response_format: { type: 'json_object' },
-      });
-      const content = response.choices[0]?.message?.content || '{}';
-      const elapsed = Date.now() - groqStartTime;
-      console.log(`[AI Engine JSON] Provider response received: provider=groq | status=200 | elapsed=${elapsed}ms | tokens=${response.usage?.total_tokens ?? 0}`);
-      return {
-        data: JSON.parse(content),
-        usage: {
-          total_tokens: response.usage?.total_tokens ?? 0,
-        },
-        provider: 'groq',
-      };
-    } catch (err) {
-      const elapsed = Date.now() - groqStartTime;
-      const cat = categorizeAIError(err);
-      console.error(`[AI Engine JSON] Groq fallback failed: status=${cat.status} | category=${cat.category} | elapsed=${elapsed}ms: ${err.message?.slice(0, 150)}`);
-      const customErr = new Error(cat.message);
-      customErr.aiError = cat;
-      throw customErr;
-    }
-  }
-
-  const noKeyCat = {
-    status: 401,
-    code: 'invalid_api_key',
-    category: 'Authentication Error',
-    message: 'No valid AI provider API key found.',
+    throw lastErr;
   };
-  const noKeyErr = new Error(noKeyCat.message);
-  noKeyErr.aiError = noKeyCat;
-  throw noKeyErr;
+
+  const tryGroqJson = async () => {
+    const groq = getGroq();
+    if (!groq) throw new Error('Groq client unavailable');
+
+    let lastErr = null;
+    for (const model of GROQ_MODELS) {
+      try {
+        const response = await groq.chat.completions.create({
+          model,
+          messages,
+          temperature: options.temperature ?? 0.2,
+          response_format: { type: 'json_object' },
+        });
+
+        const content = response.choices?.[0]?.message?.content || '{}';
+        return {
+          data: JSON.parse(content),
+          usage: { total_tokens: response.usage?.total_tokens ?? 0 },
+          provider: `groq (${model})`,
+        };
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    throw lastErr;
+  };
+
+  if (strategy.primary === 'gemini') {
+    try {
+      return await tryGeminiJson();
+    } catch (err) {
+      if (strategy.fallback === 'groq') {
+        try {
+          return await tryGroqJson();
+        } catch (groqErr) {
+          const cat = categorizeAIError(groqErr);
+          const error = new Error(cat.message);
+          error.aiError = cat;
+          throw error;
+        }
+      }
+      const cat = categorizeAIError(err);
+      const error = new Error(cat.message);
+      error.aiError = cat;
+      throw error;
+    }
+  }
+
+  if (strategy.primary === 'groq') {
+    try {
+      return await tryGroqJson();
+    } catch (err) {
+      const cat = categorizeAIError(err);
+      const error = new Error(cat.message);
+      error.aiError = cat;
+      throw error;
+    }
+  }
+
+  throw new Error('Unknown AI strategy');
 }

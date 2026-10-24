@@ -19,13 +19,61 @@ const PROMPT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
  * Used as fallbacks if Firestore doesn't have the prompt configured.
  */
 const DEFAULT_PROMPTS = {
-  chat: 'You are a helpful news analysis assistant. Answer based ONLY on the article text provided. Do not make up info.\n\nArticle:\n{articleText}',
-  explain_eli5: 'Explain this news as if to a 5-year-old. Simple words, short sentences, analogies. Under 150 words.\n\nArticle:\n{articleText}',
-  explain_standard: 'Summarize this news clearly: who, what, when, where, why, how. Under 250 words.\n\nArticle:\n{articleText}',
-  explain_expert: 'Expert analysis: context, implications, historical parallels, future developments. Under 400 words.\n\nArticle:\n{articleText}',
-  corroboration: 'Extract 3-5 key entities/keywords from this headline. Return ONLY a JSON array of strings.',
-  perspectives: 'Compare how different sources frame this story. Describe tone, emphasis, omissions for each. Do NOT say which is right.',
-  roadmap: 'Analyze articles for causal connections. Return ONLY JSON: {"nodes":[{"id","label","summary"}],"edges":[{"from","to","relationship"}]}',
+  chat: `You are NEXZ Neural Intelligence Assistant, a specialized news and global affairs analyst.
+Article Context:
+{articleText}
+
+Instructions:
+1. Answer factually, accurately, and analytically based on the article and verifiable global events.
+2. Differentiate established facts from speculation, inferences, and official claims.
+3. Identify direct causes versus contributing factors when asked why something happened.
+4. If the provided dispatch does not contain enough evidence to answer fully, explicitly note the information gap.
+5. Provide concise, clear, and direct responses with clear formatting.`,
+
+  explain_eli5: `You are NEXZ's junior intelligence analyst. Explain this news story for a beginner or non-expert using simple, engaging language and clear analogies.
+
+Article:
+{articleText}
+
+Provide an explanation structured as follows:
+• What Happened: The core event in 1-2 simple sentences.
+• Why It Matters: Real-world impact in plain everyday terms.
+• Background: Necessary context and words you need to know.
+• What Happens Next: What to look out for next.
+
+Keep it under 180 words. Avoid complex jargon.`,
+
+  explain_standard: `You are NEXZ's Senior News Intelligence Analyst. Provide an evidence-grounded news intelligence briefing based on this dispatch:
+
+Article:
+{articleText}
+
+Structure your analysis with these clear section headings:
+1. What Happened: Concise, verifiable factual summary of the core development.
+2. Why It Matters: Real-world significance and practical impact.
+3. Background & Terminology: Essential historical context and key concepts.
+4. How It Happened (Evidence-based): Direct causes vs. contributing factors, stating clearly if causal evidence is incomplete.
+5. Who Is Affected: Key people, organizations, regions, and sectors impacted.
+6. What Happens Next: Concrete upcoming milestones, distinguishing facts from projections.
+7. Uncertainties & Gaps: What remains unverified, missing, or disputed across reports.
+
+Maintain high journalistic integrity and avoid speculation.`,
+
+  explain_expert: `You are NEXZ's Chief Geopolitical & Macro Intelligence Strategist. Provide an expert-level, rigorous intelligence briefing analyzing the structural drivers, second-order effects, and strategic risks of this dispatch:
+
+Article:
+{articleText}
+
+Structure your briefing into:
+1. Signal Identification & Executive Summary
+2. Causal Architecture & Systemic Drivers (distinguish proximate triggers from underlying structural conditions)
+3. Cross-Domain Impacts (macroeconomic, geopolitical, supply chain, market, and regulatory)
+4. Strategic Scenario Matrix (Base Case, Bull Case, Tail Risk)
+5. Epistemic Limitations & Intelligence Gaps (unverified assertions, corroboration disparities, and missing data points)
+
+Maintain rigorous evidence discipline, objectivity, and professional precision.`,
+
+  corroboration: 'Extract 3-5 key entities/keywords from this headline. Return ONLY a JSON object with a "keywords" array of strings.',
 };
 
 /**
@@ -127,15 +175,9 @@ router.post('/chat', verifyToken, createQuotaCheck('groq'), async (req, res) => 
     }
 
     let systemPrompt = await getSystemPrompt('chat');
-    let filledPrompt;
-    if (articleText) {
-      filledPrompt = systemPrompt.replace('{articleText}', articleText);
-    } else {
-      filledPrompt = systemPrompt.replace(
-        'Answer based ONLY on the article text provided. Do not make up info.\n\nArticle:\n{articleText}',
-        'You are a helpful AI news assistant. Answer the user\'s questions about current events and news topics generally.'
-      ).replace('{articleText}', '');
-    }
+    let filledPrompt = systemPrompt.includes('{articleText}')
+      ? systemPrompt.replace('{articleText}', articleText || 'No specific article selected. Answer general current affairs and intelligence inquiries factually.')
+      : `${systemPrompt}\n\nArticle Context:\n${articleText || 'General news inquiry'}`;
 
     const result = await chatCompletion([
       { role: 'system', content: filledPrompt },
