@@ -2,12 +2,19 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { readFileSync, existsSync } from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { initializeApp, cert } from 'firebase-admin/app';
+import { createServer as createViteServer } from 'vite';
 
 // Route imports
 import newsRouter from './routes/news.js';
 import llmRouter, { seedDefaultPrompts } from './routes/llm.js';
 import adminRouter from './routes/admin.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const clientRoot = path.resolve(__dirname, '../client');
 
 // ========================================================
 // Firebase Admin SDK Initialization
@@ -63,45 +70,29 @@ initializeFirebase();
 // Express App Setup
 // ========================================================
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 3000;
 
-const allowedOrigins = [
-  'http://localhost:5173',
-  'http://localhost:5174',
-];
-if (process.env.CLIENT_URL) {
-  allowedOrigins.push(process.env.CLIENT_URL);
-}
-
-app.use(cors({
-  origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-}));
+app.use(cors());
 
 // Body parser with 10mb limit
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // ========================================================
-// Route Mounting
+// Route Mounting (both /api/prefix and direct prefix)
 // ========================================================
 app.use('/api/news', newsRouter);
 app.use('/api/llm', llmRouter);
 app.use('/api/admin', adminRouter);
 
+app.use('/news', newsRouter);
+app.use('/llm', llmRouter);
+app.use('/admin-api', adminRouter);
+
 // ========================================================
 // Health Check
 // ========================================================
-app.get('/', (req, res) => {
+app.get(['/api', '/api/health', '/health'], (req, res) => {
   res.json({
     status: 'ok',
     service: 'Nexz API Server',
@@ -116,35 +107,68 @@ app.get('/', (req, res) => {
 });
 
 // ========================================================
-// Global Error Handler
+// Start Server & Vite Frontend Integration
 // ========================================================
-app.use((err, req, res, _next) => {
-  console.error('[Server] Unhandled error:', err.message);
-  console.error(err.stack);
+async function startServer() {
+  if (process.env.NODE_ENV !== 'production') {
+    const vite = await createViteServer({
+      root: clientRoot,
+      configFile: path.resolve(clientRoot, 'vite.config.js'),
+      server: {
+        middlewareMode: true,
+        hmr: false,
+      },
+      appType: 'spa',
+    });
 
-  res.status(err.status || 500).json({
-    status: 'error',
-    error: 'internal_server_error',
-    message: process.env.NODE_ENV === 'production'
-      ? 'An unexpected error occurred.'
-      : err.message,
+    app.use(vite.middlewares);
+
+    // SPA fallback: transform and serve index.html for page navigation
+    app.use(async (req, res, next) => {
+      if (req.method !== 'GET' || req.originalUrl.startsWith('/api') || req.originalUrl.startsWith('/news') || req.originalUrl.startsWith('/llm')) {
+        return next();
+      }
+      try {
+        const indexPath = path.resolve(clientRoot, 'index.html');
+        let template = readFileSync(indexPath, 'utf-8');
+        template = await vite.transformIndexHtml(req.originalUrl, template);
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
+      } catch (e) {
+        next(e);
+      }
+    });
+  } else {
+    const distPath = path.resolve(clientRoot, 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+      res.sendFile(path.resolve(distPath, 'index.html'));
+    });
+  }
+
+  // Global Error Handler
+  app.use((err, req, res, _next) => {
+    console.error('[Server] Unhandled error:', err.message);
+    res.status(err.status || 500).json({
+      status: 'error',
+      error: 'internal_server_error',
+      message: err.message,
+    });
   });
-});
 
-// ========================================================
-// Start Server
-// ========================================================
-app.listen(PORT, () => {
-  console.log(`\n🚀 Nexz API Server running on http://localhost:${PORT}`);
-  console.log(`   Health check: http://localhost:${PORT}/`);
-  console.log(`   News API:     http://localhost:${PORT}/api/news`);
-  console.log(`   LLM API:      http://localhost:${PORT}/api/llm`);
-  console.log(`   Admin API:    http://localhost:${PORT}/api/admin\n`);
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`\n🚀 Nexz Server running on http://0.0.0.0:${PORT}`);
+    console.log(`   Health check: http://0.0.0.0:${PORT}/api/health`);
+    console.log(`   News API:     http://0.0.0.0:${PORT}/api/news`);
+    console.log(`   LLM API:      http://0.0.0.0:${PORT}/api/llm`);
+    console.log(`   Admin API:    http://0.0.0.0:${PORT}/api/admin\n`);
 
-  // Seed default prompts to Firestore after server starts
-  seedDefaultPrompts().catch((err) => {
-    console.error('[Server] Failed to seed default prompts:', err.message);
+    // Seed default prompts to Firestore after server starts
+    seedDefaultPrompts().catch((err) => {
+      console.error('[Server] Failed to seed default prompts:', err.message);
+    });
   });
-});
+}
+
+startServer();
 
 export default app;

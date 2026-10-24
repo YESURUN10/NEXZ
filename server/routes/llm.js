@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { getFirestore } from 'firebase-admin/firestore';
-import { chatCompletion } from '../utils/groq.js';
+import { chatCompletion, categorizeAIError } from '../utils/aiEngine.js';
 import { logRequest } from '../utils/logger.js';
 import { verifyToken } from '../middleware/auth.js';
 import { createQuotaCheck, incrementCounter } from '../middleware/quotaCheck.js';
@@ -108,6 +108,12 @@ export function clearPromptCache(feature) {
 // POST /chat - Chat with article context (auth + groq quota)
 // ===========================================================
 router.post('/chat', verifyToken, createQuotaCheck('groq'), async (req, res) => {
+  const reqStart = Date.now();
+  const userId = req.user?.uid || 'anonymous';
+  const questionLength = req.body.question?.length || 0;
+  const articleLength = req.body.articleText?.length || 0;
+  console.log(`[LLM] Request started: POST /api/llm/chat | user=${userId} | hasArticle=${articleLength > 0} | questionLength=${questionLength}`);
+
   try {
     const { articleText, question } = req.body;
 
@@ -115,6 +121,7 @@ router.post('/chat', verifyToken, createQuotaCheck('groq'), async (req, res) => 
       return res.status(400).json({
         status: 'error',
         error: 'missing_fields',
+        category: 'Bad Request',
         message: '"question" is required.',
       });
     }
@@ -135,6 +142,9 @@ router.post('/chat', verifyToken, createQuotaCheck('groq'), async (req, res) => 
       { role: 'user', content: question },
     ]);
 
+    const elapsed = Date.now() - reqStart;
+    console.log(`[LLM] Chat completed: status=200 | elapsed=${elapsed}ms | tokens=${result.usage?.total_tokens || 0} | provider=${result.provider}`);
+
     // Increment Groq counter
     await incrementCounter('groq', result.usage.total_tokens);
 
@@ -148,22 +158,26 @@ router.post('/chat', verifyToken, createQuotaCheck('groq'), async (req, res) => 
     return res.json({
       status: 'ok',
       answer: result.content,
+      provider: result.provider,
     });
   } catch (error) {
-    console.error('[LLM] Chat error:', error.message);
+    const elapsed = Date.now() - reqStart;
+    const details = error.aiError || categorizeAIError(error);
+    console.error(`[LLM] Chat failed after ${elapsed}ms | status=${details.status} | category=${details.category}:`, error.message);
 
     logRequest({
       route: 'POST /api/llm/chat',
       userId: req.user?.uid,
       timestamp: new Date().toISOString(),
       success: false,
-      errorType: 'llm_error',
+      errorType: details.code,
     });
 
-    return res.status(500).json({
+    return res.status(details.status).json({
       status: 'error',
-      error: 'chat_failed',
-      message: error.message,
+      error: details.code,
+      category: details.category,
+      message: details.message,
     });
   }
 });
@@ -172,13 +186,20 @@ router.post('/chat', verifyToken, createQuotaCheck('groq'), async (req, res) => 
 // POST /explain - Explain article at different levels (auth + groq quota)
 // ===========================================================
 router.post('/explain', verifyToken, createQuotaCheck('groq'), async (req, res) => {
+  const reqStart = Date.now();
+  const userId = req.user?.uid || 'anonymous';
+  const level = req.body.level || 'standard';
+  const articleLength = req.body.articleText?.length || 0;
+  console.log(`[LLM] Request started: POST /api/llm/explain | user=${userId} | level=${level} | articleLength=${articleLength}`);
+
   try {
-    const { articleText, level = 'standard' } = req.body;
+    const { articleText } = req.body;
 
     if (!articleText) {
       return res.status(400).json({
         status: 'error',
         error: 'missing_fields',
+        category: 'Bad Request',
         message: '"articleText" is required.',
       });
     }
@@ -196,6 +217,9 @@ router.post('/explain', verifyToken, createQuotaCheck('groq'), async (req, res) 
       { role: 'user', content: 'Please provide the explanation.' },
     ]);
 
+    const elapsed = Date.now() - reqStart;
+    console.log(`[LLM] Explain completed: status=200 | elapsed=${elapsed}ms | tokens=${result.usage?.total_tokens || 0} | provider=${result.provider}`);
+
     // Increment Groq counter
     await incrementCounter('groq', result.usage.total_tokens);
 
@@ -210,22 +234,26 @@ router.post('/explain', verifyToken, createQuotaCheck('groq'), async (req, res) 
       status: 'ok',
       summary: result.content,
       level: normalizedLevel,
+      provider: result.provider,
     });
   } catch (error) {
-    console.error('[LLM] Explain error:', error.message);
+    const elapsed = Date.now() - reqStart;
+    const details = error.aiError || categorizeAIError(error);
+    console.error(`[LLM] Explain failed after ${elapsed}ms | status=${details.status} | category=${details.category}:`, error.message);
 
     logRequest({
       route: 'POST /api/llm/explain',
       userId: req.user?.uid,
       timestamp: new Date().toISOString(),
       success: false,
-      errorType: 'llm_error',
+      errorType: details.code,
     });
 
-    return res.status(500).json({
+    return res.status(details.status).json({
       status: 'error',
-      error: 'explain_failed',
-      message: error.message,
+      error: details.code,
+      category: details.category,
+      message: details.message,
     });
   }
 });

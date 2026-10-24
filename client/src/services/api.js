@@ -1,9 +1,18 @@
 import axios from 'axios';
 import { auth } from './firebase';
 
+const resolveBaseUrl = () => {
+  const envUrl = import.meta.env.VITE_API_BASE_URL;
+  // If empty or pointing to a non-accessible localhost port, use relative '/api'
+  if (!envUrl || envUrl.includes('localhost:') || envUrl.includes('127.0.0.1:')) {
+    return '/api';
+  }
+  return envUrl;
+};
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL,
-  timeout: 15000,
+  baseURL: resolveBaseUrl(),
+  timeout: 30000,
 });
 
 // Attach Firebase token to every request
@@ -52,11 +61,11 @@ export const getCorroboration = (headline) =>
   api.post('/news/corroboration', { headline }).then((r) => r.data);
 
 // ── LLM API ───────────────────────────────────────────
-export const chatWithArticle = (articleText, question) =>
-  api.post('/llm/chat', { articleText, question }).then((r) => r.data);
+export const chatWithArticle = (articleText, question, config = {}) =>
+  api.post('/llm/chat', { articleText, question }, { timeout: 60000, ...config }).then((r) => r.data);
 
-export const getExplanation = (articleText, level) =>
-  api.post('/llm/explain', { articleText, level }).then((r) => r.data);
+export const getExplanation = (articleText, level, config = {}) =>
+  api.post('/llm/explain', { articleText, level }, { timeout: 60000, ...config }).then((r) => r.data);
 
 // ── Admin API ─────────────────────────────────────────
 // These return the full response shape from the server

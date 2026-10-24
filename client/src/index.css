@@ -1,24 +1,27 @@
 @import "tailwindcss";
 
 @theme {
-  --color-bg-primary: #0A0C10;
-  --color-bg-secondary: #12151C;
-  --color-bg-card: #12151C;
-  --color-bg-card-hover: #1A1E29;
-  --color-border: #2A2E3B;
-  --color-border-hover: #E3A857;
-  --color-accent: #E3A857;
-  --color-accent-hover: #4FD8C4;
-  --color-accent-dim: #C9524B;
-  --color-text-primary: #EDE9E1;
-  --color-text-secondary: #8B949E;
-  --color-text-muted: #6E7681;
-  --color-success: #4FD8C4;
-  --color-warning: #E3A857;
-  --color-error: #C9524B;
+  --color-bg-primary: #05030A;
+  --color-bg-secondary: #0D061A;
+  --color-bg-card: #120820;
+  --color-bg-card-hover: #1A0D2E;
+  --color-border: #23123D;
+  --color-border-hover: #8B5CF6;
+  --color-accent: #8B5CF6;
+  --color-accent-hover: #A855F7;
+  --color-accent-dim: #6D28D9;
+  --color-energy: #38BDF8;
+  --color-energy-purple: #C084FC;
+  --color-text-primary: #F5F3FF;
+  --color-text-secondary: #A78BFA;
+  --color-text-muted: #7E709A;
+  --color-success: #34D399;
+  --color-warning: #FBBF24;
+  --color-error: #F43F5E;
   
-  --font-family-sans: 'Inter', system-ui, -apple-system, sans-serif;
-  --font-family-serif: 'Newsreader', Georgia, serif;
+  --font-family-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  --font-family-display: 'Outfit', 'Plus Jakarta Sans', sans-serif;
+  --font-family-serif: 'Outfit', 'Plus Jakarta Sans', sans-serif;
   --font-family-mono: 'JetBrains Mono', monospace;
   
   --z-index-base: 0;
@@ -43,6 +46,11 @@
     background-color: var(--color-bg-primary);
     color: var(--color-text-primary);
     scroll-behavior: smooth;
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: var(--font-family-display, var(--font-family-sans));
   }
 
   body { min-height: 100vh; overflow-x: hidden; }
@@ -76,7 +84,7 @@
 /* Component-level styles in @layer components */
 @layer components {
   .glass {
-    background: rgba(18,21,28,0.7);
+    background: rgba(13, 6, 26, 0.75);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     border: 1px solid var(--color-border);
@@ -89,7 +97,7 @@
     inset: 0;
     opacity: 0;
     transition: opacity 0.3s ease;
-    background: radial-gradient(600px circle at var(--mouse-x,50%) var(--mouse-y,50%), rgba(227,168,87,0.08), transparent 40%);
+    background: radial-gradient(600px circle at var(--mouse-x,50%) var(--mouse-y,50%), rgba(139, 92, 246, 0.12), transparent 45%);
     pointer-events: none;
     z-index: 1;
   }
@@ -98,33 +106,47 @@
   .tilt-card { perspective: 800px; }
   .tilt-card-inner { transition: transform 0.15s ease-out; transform-style: preserve-3d; }
 
-  .gradient-text { color: var(--color-accent); }
+  .gradient-text {
+    background: linear-gradient(135deg, #F5F3FF 0%, #C084FC 50%, #8B5CF6 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
 
   .btn-primary {
-    background: var(--color-accent);
-    color: var(--color-bg-primary);
+    background: linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%);
+    color: #FFFFFF;
     padding: 0.75rem 2rem;
-    border-radius: 4px;
+    border-radius: 8px;
     font-weight: 600;
     font-family: var(--font-family-mono);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    border: none;
+    border: 1px solid rgba(192, 132, 252, 0.3);
     cursor: pointer;
-    transition: all 0.3s ease;
+    transition: all 0.25s ease;
     position: relative;
     overflow: hidden;
   }
   .btn-primary:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(227,168,87,0.3);
-    background: var(--color-accent-hover);
+    box-shadow: 0 4px 20px rgba(139, 92, 246, 0.4), 0 0 12px rgba(56, 189, 248, 0.2);
+    border-color: rgba(192, 132, 252, 0.6);
   }
   .btn-primary:disabled {
     opacity: 0.5;
     cursor: not-allowed;
     transform: none;
     box-shadow: none;
+  }
+
+  /* Lightning and Electric Pulse Language */
+  .lightning-border {
+    position: relative;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+  .lightning-border:hover {
+    border-color: rgba(139, 92, 246, 0.6);
+    box-shadow: 0 0 16px rgba(139, 92, 246, 0.15), inset 0 0 8px rgba(56, 189, 248, 0.05);
   }
 
   /* Signal Line Motif */

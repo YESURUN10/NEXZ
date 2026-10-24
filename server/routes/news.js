@@ -2,10 +2,11 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import axios from 'axios';
 import { newsCache } from '../utils/cache.js';
-import { jsonCompletion } from '../utils/groq.js';
+import { jsonCompletion } from '../utils/aiEngine.js';
 import { logRequest } from '../utils/logger.js';
 import { verifyToken } from '../middleware/auth.js';
 import { createQuotaCheck, incrementCounter } from '../middleware/quotaCheck.js';
+import { isNewsApiKeyValid, fetchLiveWireNews } from '../utils/wireService.js';
 
 const router = Router();
 
@@ -16,18 +17,14 @@ const router = Router();
 const articleHashMap = new Map();
 
 /**
- * Generate MD5 hash from a URL string.
- * @param {string} url
- * @returns {string}
+ * Generate MD5 hash from a URL or unique title string.
  */
 function hashUrl(url) {
   return crypto.createHash('md5').update(url).digest('hex');
 }
 
 /**
- * Enrich articles with hash field and store them in the hash map.
- * @param {Array} articles
- * @returns {Array} Articles with added `hash` field
+ * Enrich articles with hash field and store them in the in-memory lookup map.
  */
 function enrichArticles(articles) {
   if (!Array.isArray(articles)) return [];
@@ -42,9 +39,9 @@ function enrichArticles(articles) {
 }
 
 // ===========================================================
-// GET /top - Top headlines (no auth, newsApi quota check)
+// GET / and /top - Top headlines (with NewsAPI or Live Wire fallback)
 // ===========================================================
-router.get('/top', createQuotaCheck('newsApi'), async (req, res) => {
+router.get(['/', '/top'], createQuotaCheck('newsApi'), async (req, res) => {
   const startTime = Date.now();
 
   try {
@@ -55,10 +52,10 @@ router.get('/top', createQuotaCheck('newsApi'), async (req, res) => {
       pageSize = 20,
     } = req.query;
 
-    // Build cache key from params
-    const cacheKey = `news:top:${country}:${category || ''}:${q || ''}:${pageSize}`;
+    const limit = Math.min(parseInt(pageSize, 10) || 20, 100);
+    const cacheKey = `news:top:${country}:${category || ''}:${q || ''}:${limit}`;
 
-    // Check cache first
+    // 1. Check cache first
     const cached = newsCache.get(cacheKey);
     if (cached) {
       logRequest({
@@ -69,45 +66,78 @@ router.get('/top', createQuotaCheck('newsApi'), async (req, res) => {
       return res.json({ status: 'ok', fromCache: true, ...cached });
     }
 
-    // Build NewsAPI request params
-    const params = {
-      country,
-      pageSize: Math.min(parseInt(pageSize, 10) || 20, 100),
-    };
-    if (category) params.category = category;
-    if (q) params.q = q;
+    let rawArticles = [];
+    let totalResults = 0;
+    let usedSource = 'none';
 
-    let response;
-    try {
-      response = await axios.get('https://newsapi.org/v2/top-headlines', { 
-        params, 
-        headers: {
-          'X-Api-Key': process.env.NEWS_API_KEY,
-          'User-Agent': 'Nexz-App/1.0'
-        },
-        timeout: 2500 
-      });
-    } catch (error) {
-      console.warn(`[News] Primary /top failed (${error.message}), falling back to mock...`);
-      const mockCategory = category || 'general';
-      const mockCountry = country || 'in';
-      response = await axios.get(`https://saurav.tech/NewsAPI/top-headlines/category/${mockCategory}/${mockCountry}.json`, { timeout: 10000 });
+    // 2. Try primary NewsAPI if key is valid
+    if (isNewsApiKeyValid(process.env.NEWS_API_KEY)) {
+      try {
+        const params = { country, pageSize: limit };
+        if (category) params.category = category;
+        if (q) params.q = q;
+
+        const response = await axios.get('https://newsapi.org/v2/top-headlines', {
+          params,
+          headers: {
+            'X-Api-Key': process.env.NEWS_API_KEY,
+            'User-Agent': 'Nexz-App/1.0',
+          },
+          timeout: 4000,
+        });
+
+        if (response.data && Array.isArray(response.data.articles) && response.data.articles.length > 0) {
+          rawArticles = response.data.articles;
+          totalResults = response.data.totalResults || rawArticles.length;
+          usedSource = 'newsapi';
+          await incrementCounter('newsApi');
+        }
+      } catch (newsApiErr) {
+        console.warn(`[News] Primary NewsAPI error: ${newsApiErr.message}. Falling back to live wire.`);
+      }
     }
-    const { totalResults, articles: rawArticles } = response.data;
+
+    // 3. Fall back to Real Live Syndicated RSS Wire if NewsAPI not configured, rate-limited, or failed
+    if (rawArticles.length === 0) {
+      try {
+        const wireArticles = await fetchLiveWireNews({
+          country,
+          category,
+          query: q,
+          limit,
+        });
+
+        if (wireArticles && wireArticles.length > 0) {
+          rawArticles = wireArticles;
+          totalResults = wireArticles.length;
+          usedSource = 'live_wire';
+        }
+      } catch (wireErr) {
+        console.error('[News] Live wire fetch failed:', wireErr.message);
+      }
+    }
+
+    // 4. If no real news could be retrieved from any source, return clean error state (NO FAKE NEWS)
+    if (!rawArticles || rawArticles.length === 0) {
+      return res.status(503).json({
+        status: 'error',
+        error: 'stream_unreachable',
+        message: 'The intelligence feed could not be reached.',
+        details: 'No live dispatches could be retrieved from real-time news sources. Please check network connectivity and retry.',
+      });
+    }
+
     const articles = enrichArticles(rawArticles);
+    const result = { totalResults, articles, source: usedSource };
 
-    const result = { totalResults, articles };
-
-    // Cache the response
+    // Cache successful result
     newsCache.set(cacheKey, result);
-
-    // Increment API counter
-    await incrementCounter('newsApi');
 
     logRequest({
       route: 'GET /api/news/top',
       timestamp: new Date().toISOString(),
       success: true,
+      durationMs: Date.now() - startTime,
     });
 
     return res.json({ status: 'ok', ...result });
@@ -118,21 +148,24 @@ router.get('/top', createQuotaCheck('newsApi'), async (req, res) => {
       route: 'GET /api/news/top',
       timestamp: new Date().toISOString(),
       success: false,
-      errorType: error.response?.status === 429 ? 'rate_limit' : 'api_error',
+      errorType: 'api_error',
     });
 
-    return res.status(error.response?.status || 500).json({
+    return res.status(500).json({
       status: 'error',
       error: 'news_api_error',
-      message: error.response?.data?.message || error.message,
+      message: 'The intelligence feed could not be reached.',
+      details: error.message,
     });
   }
 });
 
 // ===========================================================
-// GET /search - Search news articles (no auth, newsApi quota)
+// GET /search - Search news articles
 // ===========================================================
 router.get('/search', createQuotaCheck('newsApi'), async (req, res) => {
+  const startTime = Date.now();
+
   try {
     const {
       q,
@@ -143,7 +176,7 @@ router.get('/search', createQuotaCheck('newsApi'), async (req, res) => {
       pageSize = 20,
     } = req.query;
 
-    if (!q) {
+    if (!q || !q.trim()) {
       return res.status(400).json({
         status: 'error',
         error: 'missing_query',
@@ -151,10 +184,10 @@ router.get('/search', createQuotaCheck('newsApi'), async (req, res) => {
       });
     }
 
-    // Build cache key
-    const cacheKey = `news:search:${q}:${from || ''}:${to || ''}:${sortBy}:${language}:${pageSize}`;
+    const limit = Math.min(parseInt(pageSize, 10) || 20, 100);
+    const cacheKey = `news:search:${q.trim()}:${from || ''}:${to || ''}:${sortBy}:${language}:${limit}`;
 
-    // Check cache first
+    // 1. Check cache first
     const cached = newsCache.get(cacheKey);
     if (cached) {
       logRequest({
@@ -165,48 +198,82 @@ router.get('/search', createQuotaCheck('newsApi'), async (req, res) => {
       return res.json({ status: 'ok', fromCache: true, ...cached });
     }
 
-    // Build NewsAPI request params
-    const params = {
-      q,
-      sortBy,
-      language,
-      pageSize: Math.min(parseInt(pageSize, 10) || 20, 100),
-    };
-    if (from) params.from = from;
-    if (to) params.to = to;
+    let rawArticles = [];
+    let totalResults = 0;
+    let usedSource = 'none';
 
-    let response;
-    try {
-      response = await axios.get('https://newsapi.org/v2/everything', { 
-        params, 
-        headers: {
-          'X-Api-Key': process.env.NEWS_API_KEY,
-          'User-Agent': 'Nexz-App/1.0'
-        },
-        timeout: 2500 
-      });
-    } catch (error) {
-      console.warn(`[News] Primary /search failed (${error.message}), falling back to mock...`);
-      // Use the generic /top as a fallback for search since saurav doesn't support /everything properly
-      const mockCategory = 'general';
-      const mockCountry = 'in';
-      response = await axios.get(`https://saurav.tech/NewsAPI/top-headlines/category/${mockCategory}/${mockCountry}.json`, { timeout: 10000 });
+    // 2. Try primary NewsAPI if key is valid
+    if (isNewsApiKeyValid(process.env.NEWS_API_KEY)) {
+      try {
+        const params = {
+          q: q.trim(),
+          sortBy,
+          language,
+          pageSize: limit,
+        };
+        if (from) params.from = from;
+        if (to) params.to = to;
+
+        const response = await axios.get('https://newsapi.org/v2/everything', {
+          params,
+          headers: {
+            'X-Api-Key': process.env.NEWS_API_KEY,
+            'User-Agent': 'Nexz-App/1.0',
+          },
+          timeout: 4000,
+        });
+
+        if (response.data && Array.isArray(response.data.articles) && response.data.articles.length > 0) {
+          rawArticles = response.data.articles;
+          totalResults = response.data.totalResults || rawArticles.length;
+          usedSource = 'newsapi';
+          await incrementCounter('newsApi');
+        }
+      } catch (newsApiErr) {
+        console.warn(`[News] Primary NewsAPI search error: ${newsApiErr.message}. Falling back to live wire.`);
+      }
     }
-    const { totalResults, articles: rawArticles } = response.data;
+
+    // 3. Fall back to Real Live Syndicated RSS Wire
+    if (rawArticles.length === 0) {
+      try {
+        const wireArticles = await fetchLiveWireNews({
+          query: q.trim(),
+          limit,
+        });
+
+        if (wireArticles && wireArticles.length > 0) {
+          rawArticles = wireArticles;
+          totalResults = wireArticles.length;
+          usedSource = 'live_wire';
+        }
+      } catch (wireErr) {
+        console.error('[News] Live wire search fetch failed:', wireErr.message);
+      }
+    }
+
+    // 4. Return error if unable to retrieve real articles
+    if (!rawArticles || rawArticles.length === 0) {
+      return res.status(404).json({
+        status: 'error',
+        error: 'not_found',
+        message: `No live intelligence signals found for "${q}".`,
+        totalResults: 0,
+        articles: [],
+      });
+    }
+
     const articles = enrichArticles(rawArticles);
+    const result = { totalResults, articles, source: usedSource };
 
-    const result = { totalResults, articles };
-
-    // Cache the response
+    // Cache successful search
     newsCache.set(cacheKey, result);
-
-    // Increment API counter
-    await incrementCounter('newsApi');
 
     logRequest({
       route: 'GET /api/news/search',
       timestamp: new Date().toISOString(),
       success: true,
+      durationMs: Date.now() - startTime,
     });
 
     return res.json({ status: 'ok', ...result });
@@ -217,29 +284,30 @@ router.get('/search', createQuotaCheck('newsApi'), async (req, res) => {
       route: 'GET /api/news/search',
       timestamp: new Date().toISOString(),
       success: false,
-      errorType: error.response?.status === 429 ? 'rate_limit' : 'api_error',
+      errorType: 'api_error',
     });
 
-    return res.status(error.response?.status || 500).json({
+    return res.status(500).json({
       status: 'error',
       error: 'news_api_error',
-      message: error.response?.data?.message || error.message,
+      message: 'The intelligence feed could not be reached.',
+      details: error.message,
     });
   }
 });
 
 // ===========================================================
-// GET /resolve/:hash - Resolve article hash (no auth, no quota)
+// GET /resolve/:hash - Resolve article hash
 // ===========================================================
-router.get('/resolve/:hash', (req, res) => {
+router.get('/resolve/:hash', async (req, res) => {
   const { hash } = req.params;
-  const article = articleHashMap.get(hash);
+  let article = articleHashMap.get(hash);
 
   if (!article) {
     return res.status(404).json({
       status: 'error',
       error: 'article_not_found',
-      message: 'Article not found. It may have expired from the cache.',
+      message: 'Article session expired or not found.',
     });
   }
 
@@ -247,7 +315,7 @@ router.get('/resolve/:hash', (req, res) => {
 });
 
 // ===========================================================
-// POST /corroboration - Cross-reference headline (auth + quotas)
+// POST /corroboration - Cross-reference headline
 // ===========================================================
 router.post(
   '/corroboration',
@@ -266,58 +334,59 @@ router.post(
         });
       }
 
-      // Step 1: Extract keywords from headline using Groq
-      const keywordResult = await jsonCompletion([
-        {
-          role: 'system',
-          content: 'Extract 3-5 key entities/keywords from this headline. Return ONLY a JSON object with a "keywords" array of strings.',
-        },
-        {
-          role: 'user',
-          content: headline,
-        },
-      ], { temperature: 0.2, max_tokens: 256 });
+      // Step 1: Extract keywords from headline
+      let keywords = [];
+      try {
+        const keywordResult = await jsonCompletion(
+          [
+            {
+              role: 'system',
+              content:
+                'Extract 3-5 key entities/keywords from this headline. Return ONLY a JSON object with a "keywords" array of strings.',
+            },
+            {
+              role: 'user',
+              content: headline,
+            },
+          ],
+          { temperature: 0.2, max_tokens: 256 }
+        );
+        keywords = keywordResult.data?.keywords || [];
+        if (keywordResult.usage?.total_tokens) {
+          await incrementCounter('groq', keywordResult.usage.total_tokens);
+        }
+      } catch (llmErr) {
+        // Fallback simple keyword extraction
+        keywords = headline
+          .split(' ')
+          .filter((w) => w.length > 4)
+          .slice(0, 4);
+      }
 
-      const keywords = keywordResult.data?.keywords || [];
-      const searchQuery = keywords.join(' OR ');
+      const searchQuery = keywords.slice(0, 3).join(' ');
 
-      // Step 2: Search NewsAPI with extracted keywords
+      // Step 2: Search real news wire
       let sources = [];
       let matchCount = 0;
 
       if (searchQuery) {
         try {
-          const response = await axios.get('https://newsapi.org/v2/everything', {
-            params: {
-              q: searchQuery,
-              sortBy: 'relevancy',
-              language: 'en',
-              pageSize: 10,
-            },
-            headers: {
-              'X-Api-Key': process.env.NEWS_API_KEY,
-              'User-Agent': 'Nexz-App/1.0'
-            },
-            timeout: 10000,
+          const wireArticles = await fetchLiveWireNews({
+            query: searchQuery,
+            limit: 6,
           });
 
-          matchCount = response.data.totalResults || 0;
-          sources = (response.data.articles || []).map((a) => ({
+          matchCount = wireArticles.length;
+          sources = wireArticles.map((a) => ({
             title: a.title,
             source: a.source?.name,
             url: a.url,
             publishedAt: a.publishedAt,
           }));
-
-          // Increment news API counter
-          await incrementCounter('newsApi');
         } catch (searchError) {
-          console.error('[News] Corroboration search error:', searchError.message);
+          console.error('[News] Corroboration wire search error:', searchError.message);
         }
       }
-
-      // Increment Groq counter
-      await incrementCounter('groq', keywordResult.usage.total_tokens);
 
       logRequest({
         route: 'POST /api/news/corroboration',

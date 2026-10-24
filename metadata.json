@@ -1,0 +1,6 @@
+{
+  "name": "Nexz",
+  "description": "AI-powered news intelligence platform with real-time news, AI explanations, credibility scoring, and cross-source verification.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

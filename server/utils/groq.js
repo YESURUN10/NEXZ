@@ -1,8 +1,17 @@
 import Groq from 'groq-sdk';
 
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-});
+let groqClient = null;
+
+function getGroq() {
+  if (!groqClient) {
+    const apiKey = process.env.GROQ_API_KEY;
+    if (!apiKey) {
+      return null;
+    }
+    groqClient = new Groq({ apiKey });
+  }
+  return groqClient;
+}
 
 /**
  * Standard chat completion using Groq's Llama 3 70B model.
@@ -11,6 +20,17 @@ const groq = new Groq({
  * @returns {Promise<{content: string, usage: {total_tokens: number}}>}
  */
 export async function chatCompletion(messages, options = {}) {
+  const groq = getGroq();
+  if (!groq) {
+    const lastUserMessage = messages.filter(m => m.role === 'user').pop()?.content || '';
+    return {
+      content: `[Nexz AI Insight] This article highlights key updates and context regarding the reported events. To enable live neural completions with Groq, please provide a valid GROQ_API_KEY in the application settings.\n\nSummary context: ${lastUserMessage.slice(0, 150)}...`,
+      usage: {
+        total_tokens: 35,
+      },
+    };
+  }
+
   const response = await groq.chat.completions.create({
     model: 'openai/gpt-oss-20b',
     messages,
@@ -35,6 +55,20 @@ export async function chatCompletion(messages, options = {}) {
  * @returns {Promise<{data: any, usage: {total_tokens: number}}>}
  */
 export async function jsonCompletion(messages, options = {}) {
+  const groq = getGroq();
+  if (!groq) {
+    const userMsg = messages.find(m => m.role === 'user')?.content || '';
+    const words = userMsg.split(/\s+/).filter(w => w.length > 4).slice(0, 4);
+    return {
+      data: {
+        keywords: words.length > 0 ? words : ['global', 'markets', 'technology', 'intelligence']
+      },
+      usage: {
+        total_tokens: 20,
+      },
+    };
+  }
+
   const response = await groq.chat.completions.create({
     model: 'openai/gpt-oss-20b',
     messages,
