@@ -123,7 +123,8 @@ export function AuthProvider({ children }) {
       } else if (err.code === 'auth/cancelled-popup-request' || err.code === 'auth/popup-closed-by-user') {
         message = 'The Google sign-in window was closed before completing authentication.';
       } else if (err.code === 'auth/unauthorized-domain') {
-        message = `This domain (${typeof window !== 'undefined' ? window.location.hostname : 'current'}) is not authorized in Firebase Auth. Add it under Authentication > Settings > Authorized domains in the Firebase Console.`;
+        const domain = typeof window !== 'undefined' ? window.location.hostname : 'nexz-psi.vercel.app';
+        message = `Deployment domain "${domain}" is not authorized in Firebase Auth. To enable Google sign-in: In Firebase Console, open project "nexz-c24d9" > Authentication > Settings > Authorized domains, and add "${domain}".`;
       } else if (
         err.code === 'auth/invalid-api-key' || 
         err.code === 'auth/api-key-not-valid' || 

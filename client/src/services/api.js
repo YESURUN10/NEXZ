@@ -2,12 +2,21 @@ import axios from 'axios';
 import { auth } from './firebase';
 
 const resolveBaseUrl = () => {
-  const envUrl = import.meta.env.VITE_API_BASE_URL;
-  // If empty or pointing to a non-accessible localhost port, use relative '/api'
-  if (!envUrl || envUrl.includes('localhost:') || envUrl.includes('127.0.0.1:')) {
-    return '/api';
+  const envUrl = (import.meta.env.VITE_API_BASE_URL || '').trim();
+  const isLocalHost =
+    typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+  if (envUrl) {
+    // If envUrl points to localhost but the app is running on a deployed host (e.g. nexz-psi.vercel.app),
+    // safely ignore the local address and use relative '/api'
+    if (!isLocalHost && (envUrl.includes('localhost:') || envUrl.includes('127.0.0.1:'))) {
+      return '/api';
+    }
+    // Strip trailing slash so path concatenation is clean
+    return envUrl.replace(/\/+$/, '');
   }
-  return envUrl;
+  return '/api';
 };
 
 const api = axios.create({

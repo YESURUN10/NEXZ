@@ -235,11 +235,11 @@ export async function fetchLiveWireNews({
   } else {
     // Top headlines
     if (country === 'in') {
+      urls.push('https://news.google.com/rss?hl=en-IN&gl=IN&ceid=IN:en');
       urls.push('https://timesofindia.indiatimes.com/rssfeedstopstories.cms');
-      urls.push(`https://news.google.com/rss?hl=en-IN&gl=IN&ceid=IN:en`);
     } else if (country === 'gb') {
+      urls.push('https://news.google.com/rss?hl=en-GB&gl=GB&ceid=GB:en');
       urls.push('https://feeds.bbci.co.uk/news/world/rss.xml');
-      urls.push(`https://news.google.com/rss?hl=en-GB&gl=GB&ceid=GB:en`);
     } else {
       urls.push(`https://news.google.com/rss?hl=${locale.hl}&gl=${locale.gl}&ceid=${locale.ceid}`);
       urls.push('https://feeds.bbci.co.uk/news/world/rss.xml');
@@ -256,7 +256,7 @@ export async function fetchLiveWireNews({
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           Accept: 'application/rss+xml, application/xml, text/xml, */*',
         },
-        timeout: 6000,
+        timeout: 3500,
         maxRedirects: 5,
       });
 
@@ -271,10 +271,11 @@ export async function fetchLiveWireNews({
     }
   }
 
-  // Deduplicate by title or URL
+  // Deduplicate by title or URL safely
   const seen = new Set();
   const uniqueArticles = [];
   for (const art of aggregated) {
+    if (!art || !art.title) continue;
     const key = art.title.toLowerCase().trim();
     if (!seen.has(key)) {
       seen.add(key);

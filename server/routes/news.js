@@ -20,7 +20,7 @@ const articleHashMap = new Map();
  * Generate MD5 hash from a URL or unique title string.
  */
 function hashUrl(url) {
-  return crypto.createHash('md5').update(url).digest('hex');
+  return crypto.createHash('md5').update(String(url || Date.now())).digest('hex');
 }
 
 /**
@@ -29,13 +29,15 @@ function hashUrl(url) {
 function enrichArticles(articles) {
   if (!Array.isArray(articles)) return [];
 
-  return articles.map((article) => {
-    const url = article.url || article.title || String(Date.now());
-    const hash = hashUrl(url);
-    const enriched = { ...article, hash };
-    articleHashMap.set(hash, enriched);
-    return enriched;
-  });
+  return articles
+    .filter((article) => article && typeof article === 'object')
+    .map((article, idx) => {
+      const url = String(article.url || article.title || `news-${Date.now()}-${idx}`);
+      const hash = hashUrl(url);
+      const enriched = { ...article, hash };
+      articleHashMap.set(hash, enriched);
+      return enriched;
+    });
 }
 
 // ===========================================================
@@ -83,7 +85,7 @@ router.get(['/', '/top'], createQuotaCheck('newsApi'), async (req, res) => {
             'X-Api-Key': process.env.NEWS_API_KEY,
             'User-Agent': 'Nexz-App/1.0',
           },
-          timeout: 4000,
+          timeout: 2500,
         });
 
         if (response.data && Array.isArray(response.data.articles) && response.data.articles.length > 0) {
@@ -93,7 +95,7 @@ router.get(['/', '/top'], createQuotaCheck('newsApi'), async (req, res) => {
           await incrementCounter('newsApi');
         }
       } catch (newsApiErr) {
-        console.warn(`[News] Primary NewsAPI error: ${newsApiErr.message}. Falling back to live wire.`);
+        console.warn(`[News] Primary NewsAPI error: ${newsApiErr.response?.data?.message || newsApiErr.message}. Falling back to live wire.`);
       }
     }
 
@@ -151,11 +153,16 @@ router.get(['/', '/top'], createQuotaCheck('newsApi'), async (req, res) => {
       errorType: 'api_error',
     });
 
-    return res.status(500).json({
+    const isNetworkErr = error?.code === 'ENOTFOUND' || error?.code === 'ECONNABORTED' || error?.code === 'ETIMEDOUT';
+    const status = isNetworkErr ? 503 : 500;
+
+    return res.status(status).json({
       status: 'error',
-      error: 'news_api_error',
+      error: isNetworkErr ? 'upstream_unreachable' : 'news_api_error',
       message: 'The intelligence feed could not be reached.',
-      details: error.message,
+      details: process.env.NODE_ENV === 'production' 
+        ? 'Real-time intelligence feed is temporarily unavailable. Please retry.' 
+        : error.message,
     });
   }
 });
@@ -220,7 +227,7 @@ router.get('/search', createQuotaCheck('newsApi'), async (req, res) => {
             'X-Api-Key': process.env.NEWS_API_KEY,
             'User-Agent': 'Nexz-App/1.0',
           },
-          timeout: 4000,
+          timeout: 2500,
         });
 
         if (response.data && Array.isArray(response.data.articles) && response.data.articles.length > 0) {
@@ -230,7 +237,7 @@ router.get('/search', createQuotaCheck('newsApi'), async (req, res) => {
           await incrementCounter('newsApi');
         }
       } catch (newsApiErr) {
-        console.warn(`[News] Primary NewsAPI search error: ${newsApiErr.message}. Falling back to live wire.`);
+        console.warn(`[News] Primary NewsAPI search error: ${newsApiErr.response?.data?.message || newsApiErr.message}. Falling back to live wire.`);
       }
     }
 
@@ -287,11 +294,16 @@ router.get('/search', createQuotaCheck('newsApi'), async (req, res) => {
       errorType: 'api_error',
     });
 
-    return res.status(500).json({
+    const isNetworkErr = error?.code === 'ENOTFOUND' || error?.code === 'ECONNABORTED' || error?.code === 'ETIMEDOUT';
+    const status = isNetworkErr ? 503 : 500;
+
+    return res.status(status).json({
       status: 'error',
-      error: 'news_api_error',
+      error: isNetworkErr ? 'upstream_unreachable' : 'news_api_error',
       message: 'The intelligence feed could not be reached.',
-      details: error.message,
+      details: process.env.NODE_ENV === 'production'
+        ? 'Real-time intelligence feed is temporarily unavailable. Please retry.'
+        : error.message,
     });
   }
 });

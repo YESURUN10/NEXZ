@@ -26,7 +26,7 @@ function getGroq() {
   return groqClient;
 }
 
-const GEMINI_MODELS = ['gemini-3.1-flash-lite', 'gemini-3.8-flash'];
+const GEMINI_MODELS = ['gemini-3.1-flash-lite', 'gemini-2.5-flash', 'gemini-3.8-flash'];
 
 /**
  * Categorizes an AI provider error into standard HTTP status, machine code, and user-friendly category.
